@@ -1,4 +1,5 @@
 import logging
+import pytest
 import time
 
 from utils import *
@@ -7,118 +8,118 @@ from fireplace.card import Card
 
 logging.disable(logging.INFO)
 
-def test_selector():
-	# Do this only once because we want the game to have the same state each time
+ARBITRARY_SEED = 1857
+
+def setup_game(handtype) -> fireplace.game.Game:
+	random.seed(ARBITRARY_SEED)
 	game = prepare_game()
 
-	for hand in range(3):
+	if handtype == 0:
+		print("Hand size = 5")
+		game.player1.give("EX1_561")
+	elif handtype == 1:
+		print("Hand size = 10")
+		game.player1.give("EX1_561")
+		#game.player1.give("LOE_006")
+		game.player1.give("LOE_006")
+		game.player1.give("LOE_006")
+		game.player1.give("LOE_006")
+		game.player1.give("LOE_006")
+	elif handtype == 2:
+		print("Hand size = 1")
+		game.player1.discard_hand()
+		game.player1.give("EX1_561")
 
-		if (hand == 0):
-			print("Hand size = 5")
-			game.player1.give("EX1_561")
-
-		elif (hand == 1):
-			print("Hand size = 10")
-			game.player1.give("LOE_006")
-			game.player1.give("LOE_006")
-			game.player1.give("LOE_006")
-			game.player1.give("LOE_006")
-			game.player1.give("LOE_006")
-
-		elif (hand == 2):
-			print("Hand size = 1")
-			game.player1.discard_hand()
-			game.player1.give("EX1_561")
-
-		numIterations = 1000
-		print("Running " + str(numIterations) + " iterations...")
-
-		# Get all the dragons in all friendly players' hands, using player 1's hand as a source
-		# Should return just Alexstrasza
-
-		# 1. Standard selector
-		selector = IN_HAND + DRAGON + FRIENDLY
-
-		start = time.time()
-
-		for i in range(numIterations):
-			m = selector.eval(game, game.player1)
-			assert len(m) == 1
-			assert m[0].data.id == "EX1_561"
-
-		elapsed = time.time() - start
-
-		print("1. Standard selector: %.3f sec" % elapsed)
+	return game
 
 
-		# 2. With entity segregation
-
-		# The idea is to split up entities into more manageable structures than a single huge game object
-		# The game will maintain a zone[Zone.*] attribute, allowing IN_HAND to become player.zone[Zone.HAND]
-		# and FRIENDLY becomes the aggregate of the zone attribute array for the player (flattened list)
-
-		# NOTE: This change can be made in a piecemeal fashion throughout the code
-		# without modifying the DSL, by defining classes like:
-		# class IN_HAND(Selector): def eval(source): return source.zone[Zone.HAND] for example
-
-		# Segregate zone items (this should be maintained as the game state changes by adding and removing items)
-		game.zone_entities = {}
-	
-		zone_enum_list = list(map(int, Zone))
-		for zone in zone_enum_list:
-			game.zone_entities[zone] = []
-
-		for item in game:
-			if (hasattr(item, 'zone')):
-				game.zone_entities[item.zone].append(item)
-
-		# If we also split the zones by player, this makes things like FRIENDLY much faster
-		game.player1.zone_entities = {}
-		game.player2.zone_entities = {}
-	
-		for zone in zone_enum_list:
-			game.player1.zone_entities[zone] = []
-
-		for zone in zone_enum_list:
-			game.player2.zone_entities[zone] = []
-
-		for item in game:
-			if hasattr(item, 'zone') and getattr(item, 'controller', None) != None:
-				item.controller.zone_entities[item.zone].append(item)
-
-		# Some fake selectors
-		class DragonSelector(Selector):
-			def eval(self, entities, source):
-				return [e for e in entities if getattr(e, 'race', Race.INVALID) == Race.DRAGON]
-
-		class InHandSelector(Selector):
-			def eval(self, entities, source):
-				return source.zone_entities[Zone.HAND]  # we can also just use source.hand here
-
-		class FriendlySelector(Selector):
-			def eval(self, entities, source):
-				return [item for sublist in source.zone_entities.values() for item in sublist]
+def run_selector(s, game):
+	m = s.eval(game, game.player1)
+	assert len(m) == 1
+	assert m[0].data.id == "EX1_561"
 
 
-		IN_HAND_2 = InHandSelector()
-		DRAGON_2  = DragonSelector()
-		FRIENDLY_2 = FriendlySelector()
-	
-		# You can mix and match these with the original IN_HAND, DRAGON and FRIENDLY for comparison
-		# FRIENDLY is by far the biggest time killer
-		selector = IN_HAND_2 + DRAGON_2 + FRIENDLY_2
+def make_id(handtype):
+	return "handtype: %d" % handtype
 
-		start = time.time()
 
-		# Note the inner loop is the same as (1) so no major code changes needed
-		for i in range(numIterations):
-			m = selector.eval(game, game.player1)
-			assert len(m) == 1
-			assert m.pop().data.id == "EX1_561"
+@pytest.mark.parametrize("handtype", range(3), ids=make_id)
+def test_standard_selector(benchmark, handtype):
+	# Get all the dragons in all friendly players' hands, using player 1's hand as a source
+	# Should return just Alexstrasza
 
-		elapsed = time.time() - start
+	# 1. Standard selector
+	s = IN_HAND + DRAGON + FRIENDLY
+	game = setup_game(handtype)
+	benchmark(run_selector, s, game)
 
-		print("2. (1) + With entity segregation: %.3f sec" % elapsed)
+
+@pytest.mark.parametrize("handtype", range(3), ids=make_id)
+def test_segregated_selector(benchmark, handtype):
+	# 2. With entity segregation
+
+	# The idea is to split up entities into more manageable structures than a single huge game object
+	# The game will maintain a zone[Zone.*] attribute, allowing IN_HAND to become player.zone[Zone.HAND]
+	# and FRIENDLY becomes the aggregate of the zone attribute array for the player (flattened list)
+
+	# NOTE: This change can be made in a piecemeal fashion throughout the code
+	# without modifying the DSL, by defining classes like:
+	# class IN_HAND(Selector): def eval(source): return source.zone[Zone.HAND] for example
+
+	# Segregate zone items (this should be maintained as the game state changes by adding and removing items)
+	game = setup_game(handtype)
+
+	game.zone_entities = {}
+
+	zone_enum_list = list(map(int, Zone))
+	for zone in zone_enum_list:
+		game.zone_entities[zone] = []
+
+	for item in game:
+		if (hasattr(item, 'zone')):
+			game.zone_entities[item.zone].append(item)
+
+	# If we also split the zones by player, this makes things like FRIENDLY much faster
+	game.player1.zone_entities = {}
+	game.player2.zone_entities = {}
+
+	for zone in zone_enum_list:
+		game.player1.zone_entities[zone] = []
+
+	for zone in zone_enum_list:
+		game.player2.zone_entities[zone] = []
+
+	for item in game:
+		if hasattr(item, 'zone') and getattr(item, 'controller', None) != None:
+			item.controller.zone_entities[item.zone].append(item)
+
+	# Some fake selectors
+	class DragonSelector(Selector):
+		def eval(self, entities, source):
+			return [e for e in entities if getattr(e, 'race', Race.INVALID) == Race.DRAGON]
+
+	class InHandSelector(Selector):
+		def eval(self, entities, source):
+			return source.zone_entities[Zone.HAND]  # we can also just use source.hand here
+
+	class FriendlySelector(Selector):
+		def eval(self, entities, source):
+			return [item for sublist in source.zone_entities.values() for item in sublist]
+
+	IN_HAND_2 = InHandSelector()
+	DRAGON_2 = DragonSelector()
+	FRIENDLY_2 = FriendlySelector()
+
+	# You can mix and match these with the original IN_HAND, DRAGON and FRIENDLY for comparison
+	# FRIENDLY is by far the biggest time killer
+	s = IN_HAND_2 + DRAGON_2 + FRIENDLY_2
+
+	# Get all the dragons in all friendly players' hands, using player 1's hand as a source
+	# Should return just Alexstrasza
+	benchmark(run_selector, s, game)
+
+"""
+
 
 
 		# 3. Using set operations instead of OpSelector
@@ -485,10 +486,6 @@ def test_selector():
 		elapsed = time.time() - start
 
 		print("IL4. (10) + Input lensing: %.3f sec" % elapsed)
-
-
-if __name__ == "__main__":
-	test_selector()
-
+"""
 
 # TODO: Caching - 2 caching strategies: keep total results, or keep individual selector results before OpSelector

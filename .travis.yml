@@ -12,6 +12,7 @@ install:
 script:
   - py.test
   - py.test tests/benchmarks.py
+  - py.test tests/selector_tests.py
 notifications:
   email:
     on_failure: always
